@@ -5,6 +5,7 @@ on:
     branches: [main, "cursor/**"]
     paths:
       - "photo-sort-pro/**"
+      - ".github/workflows/build-dmg.yml"
   workflow_dispatch:
 
 jobs:
