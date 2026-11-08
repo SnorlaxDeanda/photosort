@@ -1,10 +1,66 @@
-import { IpcMain, Dialog, BrowserWindow } from 'electron'
+import { IpcMain, Dialog, BrowserWindow, app } from 'electron'
+import fs from 'fs'
+import path from 'path'
+import os from 'os'
 import { scanDirectory } from './fileScanner'
 import { detectDuplicates } from './duplicateDetector'
 import { organizeFiles } from './fileSorter'
-import { OrganizeOptions, ScanResult } from '../shared/types'
+import { OrganizeOptions, ScanResult, SuggestedFolder } from '../shared/types'
+
+function getSuggestedFolders(): SuggestedFolder[] {
+  const home = os.homedir()
+  const platform = process.platform
+  const suggestions: SuggestedFolder[] = []
+
+  const add = (label: string, folderPath: string, icon: string, note?: string) => {
+    if (fs.existsSync(folderPath)) {
+      suggestions.push({ label, path: folderPath, icon, note })
+    }
+  }
+
+  if (platform === 'darwin') {
+    add('Pictures', path.join(home, 'Pictures'), '🖼️')
+    add('Desktop', path.join(home, 'Desktop'), '🖥️')
+    add('Downloads', path.join(home, 'Downloads'), '⬇️')
+    add('iCloud Photos', path.join(home, 'Pictures', 'iCloud Photos', 'Downloads'), '☁️')
+
+    // Apple Photos Library — offer the Originals folder inside the bundle
+    const photosLib = path.join(home, 'Pictures', 'Photos Library.photoslibrary')
+    const photosOriginalsLegacy = path.join(photosLib, 'Masters')      // macOS < Catalina
+    const photosOriginals = path.join(photosLib, 'originals')           // macOS Catalina+
+    if (fs.existsSync(photosOriginals)) {
+      add('Photos Library (originals)', photosOriginals, '📷',
+        'Apple Photos originals — use Copy mode to preserve your library')
+    } else if (fs.existsSync(photosOriginalsLegacy)) {
+      add('Photos Library (masters)', photosOriginalsLegacy, '📷',
+        'Apple Photos originals — use Copy mode to preserve your library')
+    }
+
+    // iPhone backup photo export folders
+    add('Photo Stream', path.join(home, 'Pictures', 'Photo Stream'), '📱')
+  } else if (platform === 'win32') {
+    const pictures = path.join(home, 'Pictures')
+    const oneDrivePictures = path.join(home, 'OneDrive', 'Pictures')
+    const googlePhotos = path.join(home, 'Pictures', 'Google Photos')
+
+    add('My Pictures', pictures, '🖼️')
+    add('Desktop', path.join(home, 'Desktop'), '🖥️')
+    add('Downloads', path.join(home, 'Downloads'), '⬇️')
+    add('OneDrive Pictures', oneDrivePictures, '☁️')
+    add('Google Photos backup', googlePhotos, '📷')
+  } else {
+    // Linux
+    add('Pictures', path.join(home, 'Pictures'), '🖼️')
+    add('Desktop', path.join(home, 'Desktop'), '🖥️')
+    add('Downloads', path.join(home, 'Downloads'), '⬇️')
+  }
+
+  return suggestions
+}
 
 export function registerIpcHandlers(ipcMain: IpcMain, dialog: Dialog): void {
+  ipcMain.handle('folders:getSuggested', () => getSuggestedFolders())
+
   ipcMain.handle('dialog:openFolder', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory']

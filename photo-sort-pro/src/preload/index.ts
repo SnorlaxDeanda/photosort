@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { OrganizeOptions, ScanResult, ScanProgress, OrganizeResult } from '../shared/types'
+import { OrganizeOptions, ScanResult, ScanProgress, OrganizeResult, SuggestedFolder } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
+  getSuggestedFolders: (): Promise<SuggestedFolder[]> =>
+    ipcRenderer.invoke('folders:getSuggested'),
+
   openFolder: (): Promise<string | null> =>
     ipcRenderer.invoke('dialog:openFolder'),
 

@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
+import { SuggestedFolder } from '../../../shared/types'
 
 interface Props {
   onStart: (sourceDir: string, destDir: string) => void
@@ -7,6 +8,7 @@ interface Props {
 declare global {
   interface Window {
     api: {
+      getSuggestedFolders: () => Promise<SuggestedFolder[]>
       openFolder: () => Promise<string | null>
       saveFolder: () => Promise<string | null>
       startScan: (dir: string, threshold: number) => Promise<unknown>
@@ -21,10 +23,16 @@ export default function WelcomeScreen({ onStart }: Props): React.ReactElement {
   const [sourceDir, setSourceDir] = useState('')
   const [destDir, setDestDir] = useState('')
   const [error, setError] = useState('')
+  const [suggestions, setSuggestions] = useState<SuggestedFolder[]>([])
+  const [activeNote, setActiveNote] = useState<string | null>(null)
+
+  useEffect(() => {
+    window.api.getSuggestedFolders().then(setSuggestions).catch(() => {})
+  }, [])
 
   async function browseSource(): Promise<void> {
     const dir = await window.api.openFolder()
-    if (dir) setSourceDir(dir)
+    if (dir) { setSourceDir(dir); setActiveNote(null) }
   }
 
   async function browseDest(): Promise<void> {
@@ -32,19 +40,16 @@ export default function WelcomeScreen({ onStart }: Props): React.ReactElement {
     if (dir) setDestDir(dir)
   }
 
+  function pickSuggestion(s: SuggestedFolder): void {
+    setSourceDir(s.path)
+    setActiveNote(s.note ?? null)
+    setError('')
+  }
+
   function handleStart(): void {
-    if (!sourceDir) {
-      setError('Please select a source folder.')
-      return
-    }
-    if (!destDir) {
-      setError('Please select a destination folder.')
-      return
-    }
-    if (sourceDir === destDir) {
-      setError('Source and destination folders must be different.')
-      return
-    }
+    if (!sourceDir) { setError('Please select a source folder.'); return }
+    if (!destDir)   { setError('Please select a destination folder.'); return }
+    if (sourceDir === destDir) { setError('Source and destination must be different.'); return }
     setError('')
     onStart(sourceDir, destDir)
   }
@@ -61,21 +66,72 @@ export default function WelcomeScreen({ onStart }: Props): React.ReactElement {
       </div>
 
       <div className="folder-setup card">
-        <FolderRow
-          label="Source Folder"
-          description="Where your photos and videos are stored"
-          value={sourceDir}
-          placeholder="Click Browse to select…"
-          onBrowse={browseSource}
-        />
+        {/* ── Source ── */}
+        <div className="folder-section">
+          <div className="folder-section-header">
+            <div className="folder-meta">
+              <span className="folder-label">Source Folder</span>
+              <span className="folder-desc">Where your photos and videos live</span>
+            </div>
+            <button className="btn btn-secondary" onClick={browseSource}>
+              Browse…
+            </button>
+          </div>
+
+          {/* Quick-pick shortcuts */}
+          {suggestions.length > 0 && (
+            <div className="suggestions">
+              {suggestions.map((s) => (
+                <button
+                  key={s.path}
+                  className={`suggestion-chip ${sourceDir === s.path ? 'active' : ''}`}
+                  onClick={() => pickSuggestion(s)}
+                  title={s.path}
+                >
+                  <span className="sug-icon">{s.icon}</span>
+                  <span className="sug-label">{s.label}</span>
+                  {s.note && <span className="sug-note-icon" title={s.note}>ℹ</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Warning for Photos Library */}
+          {activeNote && (
+            <div className="note-banner">
+              <span>ℹ️</span> <span>{activeNote}</span>
+            </div>
+          )}
+
+          {/* Selected path display */}
+          <div className="folder-path-display">
+            {sourceDir
+              ? <><span className="path-dot active" />  <span className="path-text">{sourceDir}</span></>
+              : <span className="path-text muted">No folder selected — choose above or browse</span>
+            }
+          </div>
+        </div>
+
         <div className="folder-divider" />
-        <FolderRow
-          label="Destination Folder"
-          description="Where organized files will be placed"
-          value={destDir}
-          placeholder="Click Browse to select…"
-          onBrowse={browseDest}
-        />
+
+        {/* ── Destination ── */}
+        <div className="folder-section">
+          <div className="folder-section-header">
+            <div className="folder-meta">
+              <span className="folder-label">Destination Folder</span>
+              <span className="folder-desc">Where organized files will be placed</span>
+            </div>
+            <button className="btn btn-secondary" onClick={browseDest}>
+              Browse…
+            </button>
+          </div>
+          <div className="folder-path-display">
+            {destDir
+              ? <><span className="path-dot active" /> <span className="path-text">{destDir}</span></>
+              : <span className="path-text muted">No folder selected — click Browse</span>
+            }
+          </div>
+        </div>
       </div>
 
       <div className="feature-grid">
@@ -103,35 +159,6 @@ export default function WelcomeScreen({ onStart }: Props): React.ReactElement {
       </div>
 
       <style>{STYLES}</style>
-    </div>
-  )
-}
-
-function FolderRow({
-  label,
-  description,
-  value,
-  placeholder,
-  onBrowse
-}: {
-  label: string
-  description: string
-  value: string
-  placeholder: string
-  onBrowse: () => void
-}): React.ReactElement {
-  return (
-    <div className="folder-row">
-      <div className="folder-meta">
-        <span className="folder-label">{label}</span>
-        <span className="folder-desc">{description}</span>
-      </div>
-      <div className="folder-input-wrap">
-        <span className="folder-path">{value || placeholder}</span>
-        <button className="btn btn-secondary" onClick={onBrowse}>
-          Browse…
-        </button>
-      </div>
     </div>
   )
 }
@@ -178,13 +205,31 @@ const STYLES = `
 .hero-subtitle { font-size: 15px; color: var(--text-secondary); max-width: 520px; line-height: 1.6; }
 
 .folder-setup { display: flex; flex-direction: column; gap: 0; width: 100%; text-align: left; }
+.folder-section { display: flex; flex-direction: column; gap: 10px; padding: 16px 0; }
 .folder-divider { height: 1px; background: var(--border); margin: 0 -24px; }
-.folder-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; }
-.folder-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.folder-section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.folder-meta { display: flex; flex-direction: column; gap: 3px; }
 .folder-label { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .folder-desc { font-size: 12px; color: var(--text-secondary); }
-.folder-input-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; flex-shrink: 0; max-width: 60%; }
-.folder-path { font-size: 12px; font-family: var(--font-mono); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; flex: 1; min-width: 0; }
+
+/* Quick-pick chips */
+.suggestions { display: flex; flex-wrap: wrap; gap: 8px; }
+.suggestion-chip { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 100px; border: 1px solid var(--border); background: var(--bg-elevated); font-size: 12px; font-weight: 500; color: var(--text-secondary); cursor: pointer; transition: all 0.15s; }
+.suggestion-chip:hover { border-color: var(--accent); color: var(--text-primary); background: var(--bg-hover); }
+.suggestion-chip.active { border-color: var(--accent); background: var(--accent-glow); color: var(--text-primary); }
+.sug-icon { font-size: 14px; }
+.sug-label { }
+.sug-note-icon { font-size: 11px; color: var(--warning); margin-left: 2px; }
+
+/* Note banner (Photos Library warning) */
+.note-banner { display: flex; align-items: flex-start; gap: 8px; background: rgba(250,204,21,0.08); border: 1px solid rgba(250,204,21,0.25); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 12px; color: var(--warning); line-height: 1.5; }
+
+/* Path display */
+.folder-path-display { display: flex; align-items: center; gap: 8px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; min-height: 34px; }
+.path-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+.path-dot.active { background: var(--success); }
+.path-text { font-size: 12px; font-family: var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path-text:not(.muted) { color: var(--text-secondary); }
 
 .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; width: 100%; text-align: left; }
 .feature-card { display: flex; align-items: flex-start; gap: 12px; }

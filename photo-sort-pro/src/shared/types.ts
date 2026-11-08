@@ -1,5 +1,12 @@
 export type MediaType = 'photo' | 'video' | 'unknown'
 
+export interface SuggestedFolder {
+  label: string
+  path: string
+  icon: string
+  note?: string
+}
+
 export interface MediaFile {
   id: string
   path: string
