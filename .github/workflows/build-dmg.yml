@@ -1,20 +1,21 @@
 name: Build Installers (macOS DMG + Windows EXE)
 
-# ── How to enable full macOS code-signing + notarization ──────────────────
+# ── Code signing / notarization ───────────────────────────────────────────
 #
-# Without an Apple Developer certificate the DMG is unsigned. macOS Gatekeeper
-# will warn or block it. To sign and notarize, add these GitHub repository
-# secrets (Settings → Secrets → Actions):
+# Without secrets this produces an ad-hoc signed DMG.  Gatekeeper will still
+# warn on first launch — use the xattr command from the README to bypass it.
 #
-#   CSC_LINK            Base64-encoded .p12 certificate exported from Keychain
-#                       $ base64 -i certificate.p12 | pbcopy
-#   CSC_KEY_PASSWORD    Password you set when exporting the .p12
-#   APPLE_ID            Your Apple ID email  (e.g. dev@example.com)
-#   APPLE_ID_PASSWORD   App-specific password from appleid.apple.com
-#   APPLE_TEAM_ID       10-character Team ID from developer.apple.com/account
+# To get a fully signed + notarized build (silent install, no Gatekeeper
+# warning), add these secrets to Settings → Secrets → Actions:
 #
-# When those secrets are present the build will be signed with your certificate
-# and submitted to Apple for notarization automatically.
+#   CSC_LINK          base64 -i cert.p12 | pbcopy
+#   CSC_KEY_PASSWORD  password used when exporting the .p12
+#   APPLE_ID          your Apple ID email
+#   APPLE_ID_PASSWORD app-specific password from appleid.apple.com
+#   APPLE_TEAM_ID     10-char team ID from developer.apple.com/account
+#
+# Then change the "Package → DMG" step to pass those as env vars and remove
+# CSC_IDENTITY_AUTO_DISCOVERY.
 # ──────────────────────────────────────────────────────────────────────────
 
 on:
@@ -49,38 +50,36 @@ jobs:
         working-directory: photo-sort-pro
         run: npm run build
 
-      # ── Signed + notarized build (requires Apple Developer secrets) ───────
-      - name: Package → DMG (signed + notarized)
-        if: ${{ secrets.CSC_LINK != '' }}
-        working-directory: photo-sort-pro
-        run: npx electron-builder --mac dmg --publish never
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-
-      # ── Ad-hoc signed build (no secrets — passes more Gatekeeper checks
-      #    than a fully unsigned binary, but still requires xattr bypass) ───
-      - name: Package → DMG (ad-hoc signed)
-        if: ${{ secrets.CSC_LINK == '' }}
+      - name: Package → DMG
         working-directory: photo-sort-pro
         run: npx electron-builder --mac dmg --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      # Apply a deep ad-hoc codesign to every binary inside the .app bundle.
-      # This prevents "damaged app" errors but does NOT bypass Gatekeeper for
-      # quarantined downloads — users still need the xattr command below.
+      # Ad-hoc deep codesign: eliminates "app is damaged" errors on Apple
+      # Silicon and reduces Gatekeeper false positives.
+      # Does NOT remove the quarantine warning for downloaded files —
+      # users still need: xattr -cr "/Applications/Photo Sort Pro.app"
       - name: Ad-hoc deep codesign app bundle
-        if: ${{ secrets.CSC_LINK == '' }}
-        working-directory: photo-sort-pro
         run: |
-          APP=$(ls -d release/mac*/*.app 2>/dev/null | head -1)
+          APP=$(ls -d photo-sort-pro/release/mac*/*.app 2>/dev/null | head -1)
           if [ -n "$APP" ]; then
-            echo "Signing: $APP"
+            echo "Applying ad-hoc codesign to: $APP"
             codesign --deep --force --sign - "$APP"
+          fi
+
+      - name: Rebuild DMG from codesigned app
+        run: |
+          APP=$(ls -d photo-sort-pro/release/mac*/*.app 2>/dev/null | head -1)
+          OLD_DMG=$(ls photo-sort-pro/release/*.dmg 2>/dev/null | head -1)
+          if [ -n "$APP" ] && [ -n "$OLD_DMG" ]; then
+            NEW_DMG="${OLD_DMG%.dmg}-signed.dmg"
+            hdiutil create -volname "Photo Sort Pro" \
+              -srcfolder "$APP" \
+              -ov -format UDZO "$NEW_DMG"
+            rm -f "$OLD_DMG"
+            mv "$NEW_DMG" "$OLD_DMG"
+            echo "Rebuilt DMG: $OLD_DMG"
           fi
 
       - name: List release artifacts
