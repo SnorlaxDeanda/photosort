@@ -1,0 +1,83 @@
+name: Build Installers (macOS DMG + Windows EXE)
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+    paths:
+      - "photo-sort-pro/**"
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    name: macOS DMG
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: photo-sort-pro/package-lock.json
+
+      - name: Install dependencies
+        working-directory: photo-sort-pro
+        run: npm ci
+
+      - name: Build renderer + main
+        working-directory: photo-sort-pro
+        run: npm run build
+
+      - name: Package → DMG
+        working-directory: photo-sort-pro
+        run: npx electron-builder --mac dmg --publish never
+        env:
+          # Skip code-signing — produces an unsigned DMG the user can right-click → Open
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSortPro-macOS-DMG
+          path: photo-sort-pro/release/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  build-win:
+    name: Windows NSIS installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: photo-sort-pro/package-lock.json
+
+      - name: Install dependencies
+        working-directory: photo-sort-pro
+        run: npm ci
+
+      - name: Build renderer + main
+        working-directory: photo-sort-pro
+        run: npm run build
+
+      - name: Package → EXE
+        working-directory: photo-sort-pro
+        run: npx electron-builder --win nsis portable --publish never
+
+      - name: Upload EXE installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSortPro-Windows-Setup
+          path: |
+            photo-sort-pro/release/*.exe
+          if-no-files-found: error
+          retention-days: 30
