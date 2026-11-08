@@ -2,7 +2,7 @@
   "name": "photo-sort-pro",
   "version": "1.0.0",
   "description": "Photo & Video Organizer — sort, deduplicate, and keep the best quality",
-  "main": "dist/main/index.js",
+  "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -38,7 +38,11 @@
     "directories": {
       "output": "release"
     },
-    "files": ["dist/**/*"],
+    "files": [
+      "out/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
     "mac": {
       "category": "public.app-category.photography",
       "target": ["dmg", "zip"]
