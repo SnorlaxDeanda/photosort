@@ -45,7 +45,16 @@
     ],
     "mac": {
       "category": "public.app-category.photography",
-      "target": ["dmg", "zip"]
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ]
+    },
+    "dmg": {
+      "sign": false
     },
     "win": {
       "target": ["nsis", "portable"]

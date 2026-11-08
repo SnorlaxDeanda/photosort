@@ -23,6 +23,36 @@ A cross-platform desktop application (macOS & Windows) for scanning, deduplicati
 
 **Videos:** MP4, MOV, M4V, MKV, AVI, WMV, WebM, FLV, MPG/MPEG, MTS/M2TS, 3GP
 
+## Installing on macOS — Gatekeeper warning
+
+Because the distributed DMG is not signed with an Apple Developer certificate, macOS Gatekeeper will block it. There are two ways to open it:
+
+### Option A — Terminal (one command, recommended)
+After dragging the app to `/Applications`, run this once in Terminal:
+
+```bash
+xattr -cr "/Applications/Photo Sort Pro.app"
+```
+
+Then double-click the app normally. macOS remembers the override permanently.
+
+### Option B — System Settings
+1. Open the DMG and drag the app to Applications
+2. Double-click the app — it will be blocked
+3. Go to **System Settings → Privacy & Security**
+4. Scroll down to the "Security" section — click **Open Anyway**
+
+### Option C — Sign and notarize yourself
+If you have an Apple Developer account ($99/year) you can sign and notarize the app so it installs silently with no warnings. Add these secrets to your GitHub repository (Settings → Secrets → Actions) and re-run the workflow:
+
+| Secret | Value |
+|---|---|
+| `CSC_LINK` | Base64-encoded `.p12` certificate: `base64 -i cert.p12 \| pbcopy` |
+| `CSC_KEY_PASSWORD` | Password set when exporting the `.p12` |
+| `APPLE_ID` | Your Apple ID email |
+| `APPLE_ID_PASSWORD` | App-specific password from [appleid.apple.com](https://appleid.apple.com) |
+| `APPLE_TEAM_ID` | 10-character team ID from [developer.apple.com](https://developer.apple.com/account) |
+
 ## Development
 
 ```bash
