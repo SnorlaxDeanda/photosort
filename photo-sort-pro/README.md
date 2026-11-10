@@ -84,3 +84,5 @@ npm run package
 - **Vite / electron-vite** — build tooling
 - **sharp** — fast native image processing and perceptual hashing
 - **exifr** — fast EXIF metadata parser
+
+# Build: 2026-11-10T06:00:36Z
