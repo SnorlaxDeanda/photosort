@@ -1,16 +1,40 @@
+/**
+ * Duplicate detection — two passes:
+ *
+ * Pass 1 – Exact content duplicates
+ *   Group by (size → MD5 hash).  Cost: O(n) hash lookups.
+ *
+ * Pass 2 – Visual near-duplicates (photos only)
+ *   Uses Locality Sensitive Hashing (LSH) instead of O(n²) all-pairs
+ *   comparison.  A 16-hex-char perceptual hash is split into 4 bands of
+ *   4 chars each.  Two photos that share ANY band are guaranteed to be
+ *   within ~16 bits of Hamming distance; we then verify the exact distance.
+ *
+ *   Expected cost: O(n) inserts + O(k) per bucket where k << n.
+ *   For 100 000 photos this reduces ~5 billion comparisons to a few million.
+ */
+
 import crypto from 'crypto'
-import fs from 'fs'
 import { MediaFile, DuplicateGroup } from '../shared/types'
 import { hammingDistance } from './qualityAnalyzer'
 import { md5File } from './fileScanner'
 
-/**
- * Group an array of MediaFile objects into duplicate groups.
- *
- * Pass 1 — exact duplicates: group by (size → MD5 hash).
- * Pass 2 — visual near-duplicates for photos with a perceptual hash:
- *   group remaining files where Hamming distance < threshold (default 8/64 bits).
- */
+// ── LSH parameters ────────────────────────────────────────────────────────
+// 16-hex-char hash → split into BANDS bands of BAND_WIDTH chars each.
+// A wider band = stricter similarity threshold (fewer false positives).
+const BANDS = 4
+const BAND_WIDTH = 4  // 16 hex chars / 4 bands = 4 chars each
+
+/** Build LSH band keys for a 16-char hex perceptual hash */
+function lshBands(phash: string): string[] {
+  const bands: string[] = []
+  for (let b = 0; b < BANDS; b++) {
+    const start = b * BAND_WIDTH
+    bands.push(`${b}:${phash.slice(start, start + BAND_WIDTH)}`)
+  }
+  return bands
+}
+
 export async function detectDuplicates(
   files: MediaFile[],
   similarityThreshold = 8,
@@ -19,8 +43,7 @@ export async function detectDuplicates(
   const groups: DuplicateGroup[] = []
   const usedIds = new Set<string>()
 
-  // ── Pass 1: exact content duplicates ────────────────────────────────────
-  // Group by size first (cheap filter)
+  // ── Pass 1: exact content duplicates ─────────────────────────────────
   const bySize = new Map<number, MediaFile[]>()
   for (const f of files) {
     const arr = bySize.get(f.size) ?? []
@@ -36,12 +59,11 @@ export async function detectDuplicates(
     const byHash = new Map<string, MediaFile[]>()
     for (const f of sizeGroup) {
       onProgress?.(processed++, files.length)
-      let hash = hashCache.get(f.path)
+      let hash = f.hash ?? hashCache.get(f.path)
       if (!hash) {
         try {
           hash = await md5File(f.path)
           hashCache.set(f.path, hash)
-          f.hash = hash
         } catch {
           continue
         }
@@ -66,43 +88,89 @@ export async function detectDuplicates(
     }
   }
 
-  // ── Pass 2: perceptual (visual) near-duplicates for photos ───────────────
+  // ── Pass 2: LSH-based visual near-duplicates ─────────────────────────
   const photoFiles = files.filter(
-    (f) => f.type === 'photo' && f.phash && !usedIds.has(f.id)
+    (f) => f.type === 'photo' && f.phash?.length === 16 && !usedIds.has(f.id)
   )
 
-  const visited = new Set<string>()
-  for (let i = 0; i < photoFiles.length; i++) {
-    const a = photoFiles[i]
-    if (visited.has(a.id)) continue
-    const group: MediaFile[] = [a]
+  // Build inverted index: band_key → [file, ...]
+  const buckets = new Map<string, MediaFile[]>()
+  for (const f of photoFiles) {
+    for (const key of lshBands(f.phash!)) {
+      const bucket = buckets.get(key) ?? []
+      bucket.push(f)
+      buckets.set(key, bucket)
+    }
+  }
 
-    for (let j = i + 1; j < photoFiles.length; j++) {
-      const b = photoFiles[j]
-      if (visited.has(b.id)) continue
-      const dist = hammingDistance(a.phash!, b.phash!)
-      if (dist <= similarityThreshold) {
-        group.push(b)
-        visited.add(b.id)
+  // Collect candidate pairs from shared buckets (deduplicated)
+  const candidatePairs = new Set<string>()
+  const pairList: [MediaFile, MediaFile][] = []
+  for (const bucket of buckets.values()) {
+    for (let i = 0; i < bucket.length; i++) {
+      for (let j = i + 1; j < bucket.length; j++) {
+        const key = bucket[i].id < bucket[j].id
+          ? `${bucket[i].id}|${bucket[j].id}`
+          : `${bucket[j].id}|${bucket[i].id}`
+        if (!candidatePairs.has(key)) {
+          candidatePairs.add(key)
+          pairList.push([bucket[i], bucket[j]])
+        }
       }
     }
+  }
 
-    if (group.length > 1) {
-      visited.add(a.id)
-      const maxDist = Math.max(
-        ...group.slice(1).map((b) => hammingDistance(a.phash!, b.phash!))
-      )
-      const similarity = 1 - maxDist / 64
-      const keepId = pickBestFile(group).id
-      groups.push({
-        id: crypto.randomUUID(),
-        kind: 'visual',
-        similarity,
-        files: group,
-        keepId
-      })
-      group.forEach((f) => usedIds.add(f.id))
+  // Verify exact Hamming distance for each candidate pair
+  // Union-Find to group transitive near-duplicates
+  const parent = new Map<string, string>()
+  const find = (id: string): string => {
+    if (!parent.has(id)) parent.set(id, id)
+    const p = parent.get(id)!
+    if (p !== id) { parent.set(id, find(p)); return parent.get(id)! }
+    return id
+  }
+  const union = (a: string, b: string): void => {
+    parent.set(find(a), find(b))
+  }
+
+  for (const [a, b] of pairList) {
+    if (usedIds.has(a.id) || usedIds.has(b.id)) continue
+    const dist = hammingDistance(a.phash!, b.phash!)
+    if (dist <= similarityThreshold) {
+      union(a.id, b.id)
     }
+  }
+
+  // Collect Union-Find groups into DuplicateGroup objects
+  const ufGroups = new Map<string, MediaFile[]>()
+  for (const f of photoFiles) {
+    if (usedIds.has(f.id)) continue
+    if (!parent.has(f.id)) continue  // no matches
+    const root = find(f.id)
+    const g = ufGroups.get(root) ?? []
+    g.push(f)
+    ufGroups.set(root, g)
+  }
+
+  for (const [, group] of ufGroups) {
+    if (group.length < 2) continue
+    // Compute worst-case similarity within the group
+    let maxDist = 0
+    const best = pickBestFile(group)
+    for (const f of group) {
+      if (f.id === best.id) continue
+      const d = hammingDistance(best.phash!, f.phash!)
+      if (d > maxDist) maxDist = d
+    }
+    const similarity = 1 - maxDist / 64
+    groups.push({
+      id: crypto.randomUUID(),
+      kind: 'visual',
+      similarity,
+      files: group,
+      keepId: best.id
+    })
+    group.forEach((f) => usedIds.add(f.id))
   }
 
   return groups
@@ -111,7 +179,6 @@ export async function detectDuplicates(
 /** Pick the highest-quality file from a group */
 export function pickBestFile(files: MediaFile[]): MediaFile {
   return files.reduce((best, f) => {
-    // Prefer higher format rank first, then quality score
     if (f.formatRank > best.formatRank) return f
     if (f.formatRank === best.formatRank && f.qualityScore > best.qualityScore) return f
     return best

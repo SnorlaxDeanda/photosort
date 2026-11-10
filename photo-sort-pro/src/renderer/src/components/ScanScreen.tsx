@@ -74,6 +74,18 @@ export default function ScanScreen({ sourceDir, onDone, onBack }: Props): React.
         {progress.currentFile && (
           <div className="scan-current-file">{progress.currentFile}</div>
         )}
+
+        {/* Cache + concurrency badges */}
+        {(progress.cacheHits !== undefined || progress.concurrency !== undefined) && (
+          <div className="scan-badges">
+            {progress.concurrency !== undefined && (
+              <span className="scan-badge">⚡ {progress.concurrency} threads</span>
+            )}
+            {(progress.cacheHits ?? 0) > 0 && (
+              <span className="scan-badge cache">{progress.cacheHits} cached (instant)</span>
+            )}
+          </div>
+        )}
       </div>
 
       {done && result && (
@@ -146,6 +158,9 @@ const STYLES = `
 .scan-phase { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .scan-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 .scan-current-file { font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
+.scan-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.scan-badge { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 100px; background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border); }
+.scan-badge.cache { color: var(--success); border-color: rgba(74,222,128,0.3); background: rgba(74,222,128,0.08); }
 
 .stat-chip-accent  { border-color: rgba(124,106,255,0.3); }
 .stat-chip-info    { border-color: rgba(96,165,250,0.3); }

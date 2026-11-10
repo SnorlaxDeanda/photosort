@@ -46,6 +46,10 @@ jobs:
         working-directory: photo-sort-pro
         run: npm ci
 
+      - name: Rebuild native modules for Electron
+        working-directory: photo-sort-pro
+        run: npx @electron/rebuild -f -w better-sqlite3 -w sharp
+
       - name: Build renderer + main
         working-directory: photo-sort-pro
         run: npm run build
@@ -112,6 +116,10 @@ jobs:
       - name: Install dependencies
         working-directory: photo-sort-pro
         run: npm ci
+
+      - name: Rebuild native modules for Electron
+        working-directory: photo-sort-pro
+        run: npx @electron/rebuild -f -w better-sqlite3 -w sharp
 
       - name: Build renderer + main
         working-directory: photo-sort-pro

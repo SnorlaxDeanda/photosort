@@ -1,8 +1,11 @@
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
+import os from 'os'
+import { Worker } from 'worker_threads'
 import { MediaFile, MediaType, ScanProgress } from '../shared/types'
 import { analyzeImage, analyzeVideo } from './qualityAnalyzer'
+import { getCached, putCached } from './scanCache'
 
 const PHOTO_EXTS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif',
@@ -74,6 +77,98 @@ export async function md5File(filePath: string): Promise<string> {
   })
 }
 
+/**
+ * Process a single file: check cache first, else run full analysis.
+ * Returns the populated MediaFile.
+ */
+async function processFile(filePath: string): Promise<MediaFile | null> {
+  const name = path.basename(filePath)
+  const ext = path.extname(name).toLowerCase()
+  const type = getMediaType(ext)
+  const rank = formatRank(ext)
+
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(filePath)
+  } catch {
+    return null
+  }
+
+  const mtime = Math.floor(stat.mtimeMs)
+  const id = crypto.randomUUID()
+
+  // ── Cache hit: skip all I/O ──────────────────────────────────────────
+  const cached = getCached(filePath, stat.size, mtime)
+  if (cached) {
+    return { id, name, type, ext, ...cached }
+  }
+
+  // ── Cache miss: full analysis ────────────────────────────────────────
+  const mediaFile: MediaFile = {
+    id, path: filePath, name, size: stat.size, type, ext,
+    qualityScore: 0, formatRank: rank
+  }
+
+  try {
+    const hash = await md5File(filePath)
+    mediaFile.hash = hash
+  } catch { /* skip */ }
+
+  try {
+    if (type === 'photo') {
+      const info = await analyzeImage(filePath)
+      Object.assign(mediaFile, info)
+    } else if (type === 'video') {
+      const info = await analyzeVideo(filePath)
+      Object.assign(mediaFile, info)
+    }
+  } catch { /* skip */ }
+
+  const pixels = (mediaFile.width ?? 0) * (mediaFile.height ?? 0)
+  mediaFile.qualityScore =
+    (pixels / 1_000_000) * rank + (stat.size / 1_000_000) * 10
+
+  putCached(mtime, mediaFile)
+  return mediaFile
+}
+
+/**
+ * Run `tasks` with at most `concurrency` running simultaneously.
+ * Reports progress via `onItem` after each task completes.
+ */
+async function pool<T>(
+  tasks: (() => Promise<T>)[],
+  concurrency: number,
+  onItem: (done: number, total: number) => void
+): Promise<(T | null)[]> {
+  const results: (T | null)[] = new Array(tasks.length).fill(null)
+  let next = 0
+  let done = 0
+  const total = tasks.length
+
+  await new Promise<void>((resolve) => {
+    function runNext(): void {
+      while (next < total) {
+        const i = next++
+        tasks[i]()
+          .then((v) => { results[i] = v })
+          .catch(() => { results[i] = null })
+          .finally(() => {
+            done++
+            onItem(done, total)
+            if (done === total) resolve()
+            else runNext()
+          })
+      }
+    }
+    // Launch initial batch
+    for (let i = 0; i < Math.min(concurrency, total); i++) runNext()
+    if (total === 0) resolve()
+  })
+
+  return results
+}
+
 export async function scanDirectory(
   dir: string,
   onProgress: (p: ScanProgress) => void
@@ -83,62 +178,46 @@ export async function scanDirectory(
   const paths: string[] = []
   walkDir(dir, paths)
 
-  const files: MediaFile[] = []
+  // Number of parallel file-analysis tasks.
+  // Sharp is CPU-bound; cap at logical CPUs but leave one for the main thread.
+  const concurrency = Math.max(1, Math.min(os.cpus().length - 1, 8))
 
-  for (let i = 0; i < paths.length; i++) {
-    const filePath = paths[i]
+  let cacheHits = 0
+  const tasks = paths.map((filePath) => async () => {
     const name = path.basename(filePath)
-    const ext = path.extname(name).toLowerCase()
-    const type = getMediaType(ext)
-    const rank = formatRank(ext)
-
-    onProgress({
-      phase: 'hashing',
-      current: i + 1,
-      total: paths.length,
-      currentFile: name
-    })
+    onProgress({ phase: 'hashing', current: 0, total: paths.length, currentFile: name, concurrency })
 
     let stat: fs.Stats
-    try {
-      stat = fs.statSync(filePath)
-    } catch {
-      continue
+    try { stat = fs.statSync(filePath) } catch { return null }
+    const mtime = Math.floor(stat.mtimeMs)
+
+    // Quick cache check without I/O
+    const cached = getCached(filePath, stat.size, mtime)
+    if (cached) {
+      cacheHits++
+      const id = crypto.randomUUID()
+      const name2 = path.basename(filePath)
+      const ext = path.extname(name2).toLowerCase()
+      return { id, name: name2, type: getMediaType(ext), ext, ...cached } as MediaFile
     }
 
-    const id = crypto.randomUUID()
-    const mediaFile: MediaFile = {
-      id,
-      path: filePath,
-      name,
-      size: stat.size,
-      type,
-      ext,
-      qualityScore: 0,
-      formatRank: rank
-    }
+    return processFile(filePath)
+  })
 
-    try {
-      if (type === 'photo') {
-        const info = await analyzeImage(filePath)
-        Object.assign(mediaFile, info)
-      } else if (type === 'video') {
-        const info = await analyzeVideo(filePath)
-        Object.assign(mediaFile, info)
-      }
-    } catch {
-      // analysis failed — keep basic metadata
-    }
+  let processed = 0
+  const rawResults = await pool(tasks, concurrency, (done, total) => {
+    processed = done
+    onProgress({
+      phase: 'hashing',
+      current: done,
+      total,
+      currentFile: path.basename(paths[Math.min(done, paths.length - 1)] ?? ''),
+      cacheHits,
+      concurrency
+    })
+  })
 
-    // Compute quality score: resolution × format rank / compression ratio
-    const pixels = (mediaFile.width ?? 0) * (mediaFile.height ?? 0)
-    const megapixels = pixels / 1_000_000
-    mediaFile.qualityScore =
-      megapixels * rank + (mediaFile.size / 1_000_000) * 10
-
-    files.push(mediaFile)
-  }
-
-  onProgress({ phase: 'comparing', current: paths.length, total: paths.length, currentFile: '' })
+  const files = rawResults.filter((f): f is MediaFile => f !== null)
+  onProgress({ phase: 'comparing', current: files.length, total: files.length, currentFile: '' })
   return files
 }

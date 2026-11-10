@@ -40,6 +40,8 @@ export interface ScanProgress {
   current: number
   total: number
   currentFile: string
+  cacheHits?: number
+  concurrency?: number
 }
 
 export interface OrganizeOptions {

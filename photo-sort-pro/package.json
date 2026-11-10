@@ -8,18 +8,28 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-builder",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "rebuild": "npx @electron/rebuild -f -w better-sqlite3"
   },
-  "keywords": ["photo", "video", "organizer", "duplicate", "sorter"],
+  "keywords": [
+    "photo",
+    "video",
+    "organizer",
+    "duplicate",
+    "sorter"
+  ],
   "author": "Photo Sort Pro",
   "license": "MIT",
   "dependencies": {
-    "exifr": "^7.1.3",
-    "sharp": "^0.33.4",
+    "better-sqlite3": "^13.0.3",
     "electron-log": "^5.1.2",
-    "electron-store": "^8.2.0"
+    "electron-store": "^8.2.0",
+    "exifr": "^7.1.3",
+    "sharp": "^0.33.4"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.2.1",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.14.8",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
@@ -27,10 +37,10 @@
     "electron": "^31.1.0",
     "electron-builder": "^24.13.3",
     "electron-vite": "^2.3.0",
-    "typescript": "^5.5.2",
-    "vite": "^5.3.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "typescript": "^5.5.2",
+    "vite": "^5.3.1"
   },
   "build": {
     "appId": "com.photosortpro.app",
@@ -50,17 +60,29 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "dmg": {
       "sign": false
     },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "linux": {
-      "target": ["AppImage", "deb"]
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     }
   }
 }
