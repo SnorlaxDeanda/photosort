@@ -1,0 +1,139 @@
+name: Build Installers (macOS DMG + Windows EXE)
+
+# ── Code signing / notarization ───────────────────────────────────────────
+#
+# Without secrets this produces an ad-hoc signed DMG.  Gatekeeper will still
+# warn on first launch — use the xattr command from the README to bypass it.
+#
+# To get a fully signed + notarized build (silent install, no Gatekeeper
+# warning), add these secrets to Settings → Secrets → Actions:
+#
+#   CSC_LINK          base64 -i cert.p12 | pbcopy
+#   CSC_KEY_PASSWORD  password used when exporting the .p12
+#   APPLE_ID          your Apple ID email
+#   APPLE_ID_PASSWORD app-specific password from appleid.apple.com
+#   APPLE_TEAM_ID     10-char team ID from developer.apple.com/account
+#
+# Then change the "Package → DMG" step to pass those as env vars and remove
+# CSC_IDENTITY_AUTO_DISCOVERY.
+# ──────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+    paths:
+      - "photo-sort-pro/**"
+      - ".github/workflows/build-dmg.yml"
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    name: macOS DMG
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: photo-sort-pro/package-lock.json
+
+      - name: Install dependencies
+        working-directory: photo-sort-pro
+        run: npm ci
+
+      - name: Rebuild native modules for Electron
+        working-directory: photo-sort-pro
+        run: npx @electron/rebuild -f -w better-sqlite3 -w sharp
+
+      - name: Build renderer + main
+        working-directory: photo-sort-pro
+        run: npm run build
+
+      - name: Package → DMG
+        working-directory: photo-sort-pro
+        run: npx electron-builder --mac dmg --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      # Ad-hoc deep codesign: eliminates "app is damaged" errors on Apple
+      # Silicon and reduces Gatekeeper false positives.
+      # Does NOT remove the quarantine warning for downloaded files —
+      # users still need: xattr -cr "/Applications/Photo Sort Pro.app"
+      - name: Ad-hoc deep codesign app bundle
+        run: |
+          APP=$(ls -d photo-sort-pro/release/mac*/*.app 2>/dev/null | head -1)
+          if [ -n "$APP" ]; then
+            echo "Applying ad-hoc codesign to: $APP"
+            codesign --deep --force --sign - "$APP"
+          fi
+
+      - name: Rebuild DMG from codesigned app
+        run: |
+          APP=$(ls -d photo-sort-pro/release/mac*/*.app 2>/dev/null | head -1)
+          OLD_DMG=$(ls photo-sort-pro/release/*.dmg 2>/dev/null | head -1)
+          if [ -n "$APP" ] && [ -n "$OLD_DMG" ]; then
+            NEW_DMG="${OLD_DMG%.dmg}-signed.dmg"
+            hdiutil create -volname "Photo Sort Pro" \
+              -srcfolder "$APP" \
+              -ov -format UDZO "$NEW_DMG"
+            rm -f "$OLD_DMG"
+            mv "$NEW_DMG" "$OLD_DMG"
+            echo "Rebuilt DMG: $OLD_DMG"
+          fi
+
+      - name: List release artifacts
+        working-directory: photo-sort-pro
+        run: ls -lh release/
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSortPro-macOS-DMG
+          path: photo-sort-pro/release/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  build-win:
+    name: Windows EXE installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: photo-sort-pro/package-lock.json
+
+      - name: Install dependencies
+        working-directory: photo-sort-pro
+        run: npm ci
+
+      - name: Rebuild native modules for Electron
+        working-directory: photo-sort-pro
+        run: npx @electron/rebuild -f -w better-sqlite3 -w sharp
+
+      - name: Build renderer + main
+        working-directory: photo-sort-pro
+        run: npm run build
+
+      - name: Package → EXE
+        working-directory: photo-sort-pro
+        run: npx electron-builder --win nsis portable --publish never
+
+      - name: Upload EXE installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoSortPro-Windows-Setup
+          path: |
+            photo-sort-pro/release/*.exe
+          if-no-files-found: error
+          retention-days: 30
